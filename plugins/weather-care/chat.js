@@ -107,8 +107,8 @@ export class ChatCare {
         if(this.now()-e.ts>=180000)continue;
         rec.lastId=e.id;
         if(!decision.send){rec.status='not-needed';this.save(state);continue;}
-        const sourceTime=clockParts(data.fetchedAt,c.timeZone);
-        const text=summary.facts+'\n'+String(decision.text).slice(0,260)+`\n预报：Open-Meteo（${sourceTime.date} ${String(Math.floor(sourceTime.minute/60)).padStart(2,'0')}:${String(sourceTime.minute%60).padStart(2,'0')} 查询；非官方预警）。`;
+        const text=String(decision.text||'').trim().slice(0,260);
+        if(!text){rec.status='not-needed';this.save(state);continue;}
         if(c.previewOnly){atomicJson(path.join(this.dir,'chat-preview.json'),{at:this.now(),chatKey,text});rec.status='preview';rec.lastAt=this.now();this.save(state);this.info='聊天关怀已预览';continue;}
         rec.status='pending';rec.lastAt=this.now();rec.count++;this.save(state);
         try{const r=await this.send(chatKey,text,signal);rec.status='sent';rec.messageId=r.messageId;this.info='聊天关怀已发送';this.lastError='';}

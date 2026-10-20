@@ -1,51 +1,155 @@
 {
   "id": "weather-care",
   "name": "天气关怀（睡前与起床）",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "apiVersion": 1,
   "entry": "index.js",
   "category": "message",
   "author": "本机定制",
   "enabledByDefault": true,
-  "permissions": ["web_fetch"],
+  "permissions": [
+    "web_fetch"
+  ],
   "capabilities": [],
   "requires": [],
-  "description": "睡前及新一天读取今明天气，遇到明显升降温、雨雪、雾、雷暴、强阵风、冷热或强紫外线时按 QQ Agent 白名单提醒。聊天提到睡觉、起床、出门、穿衣、下雨、天气可自动检查，AI 按人设写关怀；已有正常回复时避免重复。城市、作息、阈值、聊天冷却可配置；默认 22:00 / 00:00，也可改为早晨。空城市暂停主动提醒，电脑和 QQ Agent 需要保持运行。",
-  "prompt": {"sections": [{
-    "id": "weather-care-chat",
-    "title": "天气与睡前起床关怀",
-    "priority": 55,
-    "content": "用户询问近期天气、穿衣、是否带伞或与出门相关的天气时，调用 weather-care__forecast，基于实际返回的预报回答。用户明确表达自己即将睡觉（我要睡了、准备睡觉、晚安等）时，即使还没到定时时间，也调用 weather-care__forecast，occasion=sleep，重点看明天预报，再自然道晚安并提醒明天穿衣/带伞。用户明确表达自己刚醒或开始一天（刚起床、醒了、早上好、早安等）时，调用该工具，occasion=wake，重点看今天，给出适量关怀。不把谈论别人睡觉、引用晚安、讲故事、单纯讨论失眠当作本人就寝；同一轮不要反复调用或重复提醒。城市只使用用户明确提到或已经确认的地点，否则省略以读取插件设置，不能凭模型知识推测所在地。没有配置地点时先询问城市。天气正常时简短带过；预报缺失、联网失败时如实说明，不编造天气，不把模式预报说成气象部门官方预警。工具只返回数据，没有发送消息；使用当前会话正常回复渠道回复，不跨会话发送。定时提醒由插件独立完成，不要再创建重复的定时提醒任务。用户询问天气关怀开关、配置或最近运行状态时调用 weather-care__status；不能谎称已修改城市或提醒时间。"
-  }]},
+  "description": "在设置的睡前和新一天时间固定读取天气并强制使用 AI 生成关怀，天气平稳也发送；AI 只写文案、不决定是否关怀。生成失败记录原因并在补查窗口内重试，不降级成纯预报。所有主动提醒只输出简短关怀，不附天气数据列表或来源说明；聊天关键词关怀沿用语义判断与防重复机制。城市、作息和语气可配置，接收对象取 QQ Agent 白名单。",
+  "prompt": {
+    "sections": [
+      {
+        "id": "weather-care-chat",
+        "title": "天气与睡前起床关怀",
+        "priority": 55,
+        "content": "用户询问近期天气、穿衣、是否带伞或与出门相关的天气时，调用 weather-care__forecast，基于实际返回的预报，只输出一到两句自然关怀，将重点天气和行动建议连起来；不列日期、温度、降水概率，不加标题、数据列表、来源或查询时间。用户明确表达自己即将睡觉（我要睡了、准备睡觉、晚安等）时，即使还没到定时时间，也调用 weather-care__forecast，occasion=sleep，重点看明天预报，再自然道晚安并提醒明天穿衣/带伞。用户明确表达自己刚醒或开始一天（刚起床、醒了、早上好、早安等）时，调用该工具，occasion=wake，重点看今天，给出适量关怀。不把谈论别人睡觉、引用晚安、讲故事、单纯讨论失眠当作本人就寝；同一轮不要反复调用或重复提醒。城市只使用用户明确提到或已经确认的地点，否则省略以读取插件设置，不能凭模型知识推测所在地。没有配置地点时先询问城市。天气正常时简短带过；预报缺失、联网失败时如实说明，不编造天气，不把模式预报说成气象部门官方预警。工具只返回数据，没有发送消息；使用当前会话正常回复渠道回复，不跨会话发送。定时提醒由插件独立完成，不要再创建重复的定时提醒任务。用户询问天气关怀开关、配置或最近运行状态时调用 weather-care__status；不能谎称已修改城市或提醒时间。"
+      }
+    ]
+  },
   "settings": {
-    "city": "", "countryCode": "CN", "latitude": "", "longitude": "",
-    "eveningTime": "22:00", "morningTime": "00:00", "timeZone": "Asia/Shanghai",
-    "temperatureChange": 5, "hotTemperature": 35, "coldTemperature": 0,
-    "windGust": 50, "rainProbability": 60, "catchUpMinutes": 30,
-    "aiCare": true, "extraStyle": "", "dailyBriefing": false, "previewOnly": false,
-    "chatEnabled": true, "chatCooldownMinutes": 30, "chatGraceSeconds": 20, "chatMaxPerDay": 6
+    "city": "",
+    "countryCode": "CN",
+    "latitude": "",
+    "longitude": "",
+    "eveningTime": "22:00",
+    "morningTime": "00:00",
+    "timeZone": "Asia/Shanghai",
+    "temperatureChange": 5,
+    "hotTemperature": 35,
+    "coldTemperature": 0,
+    "windGust": 50,
+    "rainProbability": 60,
+    "catchUpMinutes": 30,
+    "aiCare": true,
+    "extraStyle": "",
+    "dailyBriefing": false,
+    "previewOnly": false,
+    "chatEnabled": true,
+    "chatCooldownMinutes": 30,
+    "chatGraceSeconds": 20,
+    "chatMaxPerDay": 6
   },
   "configSchema": {
-    "city": {"type":"string","label":"天气城市（必填）","description":"如重庆、北京或城市拼音。所有白名单会话共用这个默认城市；聊天可明确指定其他城市。留空时暂停定时提醒，不猜所在地。"},
-    "countryCode": {"type":"string","label":"国家代码","description":"默认 CN（中国）；国外城市可填 SG、JP 等两位国家代码。"},
-    "latitude": {"type":"string","label":"纬度（可选）","description":"与经度同时填写可精确定位，跳过城市搜索；留空则按城市名查询。"},
-    "longitude": {"type":"string","label":"经度（可选）","description":"与纬度同时填写；城市重名或中文搜索不到时可用经纬度。"},
-    "eveningTime": {"type":"string","label":"每天睡前提醒时间","description":"24 小时 HH:MM，默认 22:00。检查当天和次日，重点为明天做准备。"},
-    "morningTime": {"type":"string","label":"每天新一天提醒时间","description":"24 小时 HH:MM，默认 00:00，在次日刚开始提醒；也可改为起床时间如 07:00。与睡前时间不能相同。"},
-    "timeZone": {"type":"string","label":"提醒与天气日期使用的时区","description":"默认 Asia/Shanghai（北京时间，UTC+8），新加坡可填 Asia/Singapore。提醒时间和天气日界统一使用该时区。"},
-    "temperatureChange": {"type":"number","label":"升降温多少摄氏度开始提醒","description":"默认 5；范围 1–30。比较相邻两天的最高温和最低温，不比较当天昼夜温差。"},
-    "hotTemperature": {"type":"number","label":"偏热提醒阈值（℃）","description":"最高温达到此值提醒，默认 35；范围 20–50。这是自定义关怀阈值，不是官方预警。"},
-    "coldTemperature": {"type":"number","label":"偏冷提醒阈值（℃）","description":"最低温达到或低于此值提醒，默认 0；范围 -40–20。"},
-    "windGust": {"type":"number","label":"强阵风提醒阈值（km/h）","description":"默认 50；范围 20–150。"},
-    "rainProbability": {"type":"number","label":"带伞提醒降雨概率（%）","description":"默认 60；范围 1–100。天气代码显示降雨时，即使概率较低也提醒。"},
-    "catchUpMinutes": {"type":"number","label":"错过时间后最多补查多少分钟","description":"默认 30；范围 1–180。重启或恢复网络后仅在这个窗口内补查，避免很久后突然打扰。发送前超时结果未确认时不自动重发，以免重复。"},
-    "aiCare": {"type":"boolean","label":"用 AI 写关怀语句","description":"跟随当前会话人设。定时达到天气提醒条件、或聊天关键词命中且未被正常回复接管时调用模型；天气事实始终来自接口。失败时使用保守规则。"},
-    "extraStyle": {"type":"string","label":"关怀语气偏好","description":"可填“简短温柔一点，偶尔用颜文字”。影响定时和后台聊天关怀语句，不改变天气事实和触发规则。"},
-    "dailyBriefing": {"type":"boolean","label":"天气正常也发送简报","description":"默认关闭：仅特殊天气或明显温度变化时提醒。打开后两个时间点每天都会发送。"},
-    "previewOnly": {"type":"boolean","label":"仅预览插件主动提醒","description":"定时和聊天后台关怀只写预览文件，不发送 QQ；正常聊天工具查询仍会由机器人自行回复。"},
-    "chatEnabled": {"type":"boolean","label":"聊天关键词自动关怀","description":"默认开启。扫描白名单内的新消息，涉及睡觉/起床/出门/穿衣/下雨/天气时读取预报，交给 AI 判断是否关怀；已有机器人回复时跳过后台补发。只读最近 50 条，不重放启用前的历史。"},
-    "chatCooldownMinutes": {"type":"number","label":"聊天关怀冷却（分钟）","description":"同一会话两次后台关怀至少间隔多久，默认 30，范围 1–1440。显式 @ 机器人问天气仍按正常聊天回复，不受这个后台冷却限制。"},
-    "chatGraceSeconds": {"type":"number","label":"等待正常回复（秒）","description":"默认等待 20 秒，范围 5–120；机器人已接管或已经回复时不额外发送。后台每 10 秒检查，消息超过 3 分钟后不再补发。"},
-    "chatMaxPerDay": {"type":"number","label":"每会话每天最多后台聊天关怀次数","description":"默认 6，范围 1–50；只限制后台聊天关怀，睡前/新一天定时提醒及正常聊天查询单独计算。"}
+    "city": {
+      "type": "string",
+      "label": "天气城市（必填）",
+      "description": "如重庆、北京或城市拼音。所有白名单会话共用这个默认城市；聊天可明确指定其他城市。留空时暂停定时提醒，不猜所在地。"
+    },
+    "countryCode": {
+      "type": "string",
+      "label": "国家代码",
+      "description": "默认 CN（中国）；国外城市可填 SG、JP 等两位国家代码。"
+    },
+    "latitude": {
+      "type": "string",
+      "label": "纬度（可选）",
+      "description": "与经度同时填写可精确定位，跳过城市搜索；留空则按城市名查询。"
+    },
+    "longitude": {
+      "type": "string",
+      "label": "经度（可选）",
+      "description": "与纬度同时填写；城市重名或中文搜索不到时可用经纬度。"
+    },
+    "eveningTime": {
+      "type": "string",
+      "label": "每天睡前提醒时间",
+      "description": "24 小时 HH:MM，默认 22:00。到点固定使用 AI 生成睡前关怀，结合今明天气为明天做准备。"
+    },
+    "morningTime": {
+      "type": "string",
+      "label": "每天新一天提醒时间",
+      "description": "24 小时 HH:MM，默认 00:00，可改为起床时间如 07:00。到点固定使用 AI 生成新一天关怀，与睡前时间不能相同。"
+    },
+    "timeZone": {
+      "type": "string",
+      "label": "提醒与天气日期使用的时区",
+      "description": "默认 Asia/Shanghai（北京时间，UTC+8），新加坡可填 Asia/Singapore。提醒时间和天气日界统一使用该时区。"
+    },
+    "temperatureChange": {
+      "type": "number",
+      "label": "升降温多少摄氏度开始提醒",
+      "description": "默认 5；范围 1–30。比较相邻两天的最高温和最低温，不比较当天昼夜温差。"
+    },
+    "hotTemperature": {
+      "type": "number",
+      "label": "偏热提醒阈值（℃）",
+      "description": "最高温达到此值提醒，默认 35；范围 20–50。这是自定义关怀阈值，不是官方预警。"
+    },
+    "coldTemperature": {
+      "type": "number",
+      "label": "偏冷提醒阈值（℃）",
+      "description": "最低温达到或低于此值提醒，默认 0；范围 -40–20。"
+    },
+    "windGust": {
+      "type": "number",
+      "label": "强阵风提醒阈值（km/h）",
+      "description": "默认 50；范围 20–150。"
+    },
+    "rainProbability": {
+      "type": "number",
+      "label": "带伞提醒降雨概率（%）",
+      "description": "默认 60；范围 1–100。天气代码显示降雨时，即使概率较低也提醒。"
+    },
+    "catchUpMinutes": {
+      "type": "number",
+      "label": "错过时间后最多补查多少分钟",
+      "description": "默认 30；范围 1–180。重启或恢复网络后仅在这个窗口内补查，避免很久后突然打扰。发送前超时结果未确认时不自动重发，以免重复。"
+    },
+    "aiCare": {
+      "type": "boolean",
+      "label": "聊天关怀使用 AI",
+      "description": "仅控制聊天后台关怀是否用 AI 判断和写文案；定时提醒始终强制使用 AI，不受此开关影响。"
+    },
+    "extraStyle": {
+      "type": "string",
+      "label": "关怀语气偏好",
+      "description": "可填“简短温柔一点，偶尔用颜文字”。影响定时和后台聊天关怀语句，不改变天气事实和触发规则。"
+    },
+    "dailyBriefing": {
+      "type": "internal",
+      "description": "旧版兼容字段，保留已有配置。定时到点始终生成 AI 天气关怀，天气平稳也发送，此字段不再控制定时发送。"
+    },
+    "previewOnly": {
+      "type": "boolean",
+      "label": "仅预览插件主动提醒",
+      "description": "定时和聊天后台关怀只写预览文件，不发送 QQ；正常聊天工具查询仍会由机器人自行回复。"
+    },
+    "chatEnabled": {
+      "type": "boolean",
+      "label": "聊天关键词自动关怀",
+      "description": "默认开启。扫描白名单内的新消息，涉及睡觉/起床/出门/穿衣/下雨/天气时读取预报，交给 AI 判断是否关怀；已有机器人回复时跳过后台补发。只读最近 50 条，不重放启用前的历史。"
+    },
+    "chatCooldownMinutes": {
+      "type": "number",
+      "label": "聊天关怀冷却（分钟）",
+      "description": "同一会话两次后台关怀至少间隔多久，默认 30，范围 1–1440。显式 @ 机器人问天气仍按正常聊天回复，不受这个后台冷却限制。"
+    },
+    "chatGraceSeconds": {
+      "type": "number",
+      "label": "等待正常回复（秒）",
+      "description": "默认等待 20 秒，范围 5–120；机器人已接管或已经回复时不额外发送。后台每 10 秒检查，消息超过 3 分钟后不再补发。"
+    },
+    "chatMaxPerDay": {
+      "type": "number",
+      "label": "每会话每天最多后台聊天关怀次数",
+      "description": "默认 6，范围 1–50；只限制后台聊天关怀，睡前/新一天定时提醒及正常聊天查询单独计算。"
+    }
   }
 }

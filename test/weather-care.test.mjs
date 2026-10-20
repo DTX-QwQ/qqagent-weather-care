@@ -7,6 +7,7 @@ import {pathToFileURL} from 'node:url';
 import {configOf,dueSlots,targetsOf,analyze,normalizeForecast,weatherName,WeatherEngine} from '../plugins/weather-care/engine.js';
 import {ChatCare,occasionOf,blocked,ruleDecision,chatSummary} from '../plugins/weather-care/chat.js';
 import {trustedUrl,createWeatherService} from '../plugins/weather-care/network.js';
+import {createCompleter} from '../plugins/weather-care/ai.js';
 
 const hostRoot=process.env.QQ_AGENT_APP_ROOT;
 const hostTest={skip:hostRoot?false:'Set QQ_AGENT_APP_ROOT to a compatible QQ Agent app root'};
@@ -22,7 +23,7 @@ const dirs=[];test.after(()=>{for(const dir of dirs)fs.rmSync(dir,{recursive:tru
 function folder(){const d=tmp();dirs.push(d);return d;}
 function scheduled(options={}){
   const sent=[],c=cfg();let engine;
-  engine=new WeatherEngine({dir:folder(),getConfig:()=>c,hostConfig:()=>hostCfg,now:()=>now,forecast:async()=>forecast({code:61,rain:80}),care:async()=>'',
+  engine=new WeatherEngine({dir:folder(),getConfig:()=>c,hostConfig:()=>hostCfg,now:()=>now,forecast:async()=>forecast({code:61,rain:80}),care:async()=>'明天记得带伞，早点休息，晚安。',
     send:async(k,text)=>{sent.push({k,text});engine.controller.abort();return {messageId:1};},...options});
   engine.running=true;engine.controller=new AbortController();return {engine,sent,c};
 }
@@ -33,15 +34,14 @@ function chatting(options={}){
     forecast:async()=>forecast({code:61,rain:80}),writeCare:async()=>({send:true,text:'明天出门记得带伞，晚安。'}),send:async(k,text)=>{sent.push({k,text});return {messageId:2};},...options});
   chat.running=true;chat.startedAt=now-60000;chat.controller=new AbortController();return {chat,sent,c,messages,host};
 }
-test('manifest settings align; optional installed host schema validation',async()=>{
+test('manifest follows the installed host schema',async()=>{
   const raw=JSON.parse(fs.readFileSync(new URL('../plugins/weather-care/plugin.json',import.meta.url),'utf8'));
   if(hostRoot){
     const {normalizeManifest}=await import(pathToFileURL(path.join(hostRoot,'src/skills/manifest.js')));
     const {problems}=normalizeManifest(raw);assert.deepEqual(problems,[]);
   }
-  assert.equal(raw.id,'weather-care');assert.equal(raw.apiVersion,1);assert.equal(raw.entry,'index.js');
   assert.deepEqual(Object.keys(raw.settings).sort(),Object.keys(raw.configSchema).sort());
-  assert.equal(raw.version,'1.1.0');assert.deepEqual(raw.capabilities,[]);
+  assert.equal(raw.version,'1.1.1');assert.deepEqual(raw.capabilities,[]);
   assert.equal(configOf(raw.settings).chatEnabled,true);
 });
 test('times, coordinates, booleans, thresholds validated',()=>{
@@ -79,11 +79,13 @@ test('rejects missing critical fields and stale dates',()=>{
   const stale=structuredClone(data);stale.daily.time=['2026-10-18','2026-10-19'];assert.throws(()=>normalizeForecast(stale,now,cfg(),{}));
 });
 test('scheduled delivery persists dedupe across engine instances',async()=>{
-  const h=scheduled();await h.engine.tick();assert.equal(h.sent.length,1);
+  const h=scheduled();await h.engine.tick();assert.equal(h.sent.length,1);assert.equal(h.sent[0].text,'明天记得带伞，早点休息，晚安。');
   const h2=scheduled({dir:h.engine.dir});await h2.engine.tick();assert.equal(h2.sent.length,0);
 });
-test('stable schedule avoids sending and records quiet',async()=>{
-  const h=scheduled({forecast:async()=>forecast()});await h.engine.tick();assert.equal(h.sent.length,0);assert.equal(Object.values(h.engine.state().deliveries)[0].status,'quiet');
+test('stable schedule always generates AI care despite legacy toggles',async()=>{
+  let calls=0;const h=scheduled({forecast:async()=>forecast(),care:async()=>{calls++;return '晚安，愿你明天顺顺利利。';}});
+  assert.equal(h.c.aiCare,false);assert.equal(h.c.dailyBriefing,false);
+  await h.engine.tick();assert.equal(calls,1);assert.equal(h.sent.length,1);assert.match(h.sent[0].text,/晚安，愿你明天顺顺利利/);assert.equal(Object.values(h.engine.state().deliveries)[0].care,'ai');
 });
 test('preview does not send or consume real-send dedupe',async()=>{
   const h=scheduled();h.c.previewOnly=true;await h.engine.tick();assert.equal(h.sent.length,0);assert(fs.existsSync(path.join(h.engine.dir,'preview.json')));
@@ -99,8 +101,45 @@ test('corrupt schedule state fails closed',async()=>{
 test('disable and offline prevent work',async()=>{
   const h=scheduled({canSend:async()=>false});await h.engine.tick();assert.equal(h.sent.length,0);h.engine.stop();await h.engine.tick();assert.equal(h.sent.length,0);
 });
-test('AI failure still sends factual scheduled care',async()=>{
-  const h=scheduled({care:async()=>{throw Error('AI offline');}});h.c.aiCare=true;await h.engine.tick();assert.equal(h.sent.length,1);assert.match(h.sent[0].text,/Open-Meteo/);
+test('AI failure never sends a forecast alone and retry survives engine reload',async()=>{
+  let calls=0;const h=scheduled({care:async()=>{calls++;throw Error('AI offline');}});await h.engine.tick();await h.engine.tick();
+  assert.equal(h.sent.length,0);assert.equal(calls,1);assert.match(h.engine.lastError,/AI offline/);
+  const record=Object.values(h.engine.state().deliveries)[0];assert.equal(record.status,'ai-error');assert.equal(record.retryAt,now+60000);
+  const h2=scheduled({dir:h.engine.dir});await h2.engine.tick();assert.equal(h2.sent.length,0);
+  h2.engine.now=()=>now+60001;await h2.engine.tick();assert.equal(h2.sent.length,1);assert.equal(Object.values(h2.engine.state().deliveries)[0].status,'sent');
+});
+test('empty or non-text AI care cannot complete a scheduled delivery',async()=>{
+  for(const value of ['', '   ', null, {send:false}]){
+    const h=scheduled({care:async()=>value});await h.engine.tick();assert.equal(h.sent.length,0);assert.equal(Object.values(h.engine.state().deliveries)[0].status,'ai-error');
+  }
+});
+test('AI retry cannot send beyond the catch-up window',async()=>{
+  const h=scheduled({care:async()=>{throw Error('offline');}});await h.engine.tick();
+  h.engine.now=()=>now+31*60000;h.engine.care=async()=>'晚安';await h.engine.tick();assert.equal(h.sent.length,0);
+});
+test('generation aborted by disabling does not send or consume delivery',async()=>{
+  const h=scheduled();h.engine.care=async()=>{h.engine.stop();throw Error('cancelled');};await h.engine.tick();assert.equal(h.sent.length,0);assert.equal(Object.keys(h.engine.state().deliveries).length,0);
+});
+test('legacy delivered, quiet and uncertain records remain terminal',async()=>{
+  for(const status of ['sent','quiet','uncertain','pending']){
+    const h=scheduled();h.engine.save({version:1,deliveries:{'2026-10-20|evening|private:123|send':{date:'2026-10-20',status}}});
+    await h.engine.tick();assert.equal(h.sent.length,0);
+  }
+});
+test('both configured time slots require AI care and remain deduplicated',async()=>{
+  const h=scheduled();h.c.morningTime='09:00';h.engine.now=()=>Date.parse('2026-10-20T01:00:10Z');
+  await h.engine.tick();assert.equal(h.sent.length,1);assert.equal(h.sent[0].text,'明天记得带伞，早点休息，晚安。');
+  const h2=scheduled({dir:h.engine.dir});h2.c.morningTime='09:00';await h2.engine.tick();assert.equal(h2.sent.length,1);assert.equal(h2.sent[0].text,'明天记得带伞，早点休息，晚安。');
+});
+test('model care call disables tool selection and thinking; handles text parts',async()=>{
+  let args;const complete=createCompleter(async a=>{args=a;return {message:{content:[{type:'text',text:'晚安呀。'}]}};});
+  assert.equal(await complete([],new AbortController().signal,'private:123'),'晚安呀。');
+  assert.equal(args.tools,null);assert.equal(args.toolChoice,'none');assert.equal(args.skillContext.thinkingMode,'off');assert(args.maxTokens>=700);
+});
+test('model empty, reasoning-only and truncated outputs are generation errors',async()=>{
+  for(const response of [{message:{content:''}},{message:{reasoning_content:'thinking'}},{message:{content:'晚安'},finishReason:'length'}]){
+    const complete=createCompleter(async()=>response);await assert.rejects(complete([],new AbortController().signal,'private:123'),/AI/);
+  }
 });
 test('configuration change while fetching cancels scheduled send',async()=>{
   const h=scheduled();h.engine.forecast=async()=>{h.c.city='北京';return forecast({code:61});};await h.engine.tick();assert.equal(h.sent.length,0);
@@ -111,8 +150,8 @@ test('all requested chat themes are candidates',()=>{
 test('chat weather uses tomorrow at bedtime and today when waking',()=>{
   assert.match(chatSummary(forecast(),'sleep',cfg(),now).facts,/明天（2026-10-21）/);assert.match(chatSummary(forecast(),'wake',cfg(),now).facts,/今天（2026-10-20）/);
 });
-test('chat care sends once and keeps factual attribution',async()=>{
-  const h=chatting();await h.chat.tick();await h.chat.tick();assert.equal(h.sent.length,1);assert.match(h.sent[0].text,/明天/);assert.match(h.sent[0].text,/Open-Meteo/);
+test('chat care sends once with only care text',async()=>{
+  const h=chatting();await h.chat.tick();await h.chat.tick();assert.equal(h.sent.length,1);assert.equal(h.sent[0].text,'明天出门记得带伞，晚安。');
 });
 test('does not replay pre-enable messages or self messages',async()=>{
   const h=chatting();h.chat.startedAt=now;await h.chat.tick();assert.equal(h.sent.length,0);h.chat.startedAt=now-60000;h.messages[0].self=true;await h.chat.tick();assert.equal(h.sent.length,0);

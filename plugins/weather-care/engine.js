@@ -106,14 +106,14 @@ export class WeatherEngine {
     if(!fs.existsSync(file)) return {version:1,deliveries:{}};
     const state=JSON.parse(fs.readFileSync(file,'utf8')); // Corruption must fail closed, never reset dedupe.
     if(state.version!==1||!state.deliveries||Array.isArray(state.deliveries)||typeof state.deliveries!=='object') throw new Error('提醒记录格式异常，已暂停发送');
-    for(const record of Object.values(state.deliveries))if(!record||!/^\d{4}-\d{2}-\d{2}$/.test(record.date)||!['pending','sent','uncertain','quiet','preview'].includes(record.status))throw new Error('提醒记录条目异常，已暂停发送');
+    for(const record of Object.values(state.deliveries))if(!record||!/^\d{4}-\d{2}-\d{2}$/.test(record.date)||!['pending','sent','uncertain','quiet','preview','ai-error'].includes(record.status)||(record.status==='ai-error'&&(!Number.isFinite(record.retryAt)||!Number.isInteger(record.attempts)||record.attempts<1)))throw new Error('提醒记录条目异常，已暂停发送');
     return state;
   }
   save(state) {atomicJson(path.join(this.dir,'state.json'),state);}
   start() {if(this.running)return;this.running=true;this.controller=new AbortController();this.timer=setTimeout(()=>this.loop(),1000);this.timer.unref?.();}
   stop() {this.running=false;clearTimeout(this.timer);this.controller?.abort();}
   async loop() {try{await this.tick();}catch(e){this.lastError=e.message;this.info='检查失败';this.nextRetry=this.now()+5*60000;this.log(e.message);}finally{if(this.running){this.timer=setTimeout(()=>this.loop(),30000);this.timer.unref?.();}}}
-  status() {let cfg,error;try{cfg=configOf(this.getConfig());}catch(e){error=e.message;}return {running:this.running,city:cfg?.city||'未配置',times:cfg?[cfg.eveningTime,cfg.morningTime]:[],timeZone:cfg?.timeZone,recipients:targetsOf(this.hostConfig()).length,info:!cfg?.city?'等待在插件设置中填写城市':this.info,lastError:error||this.lastError,previewOnly:cfg?.previewOnly};}
+  status() {let cfg,error;try{cfg=configOf(this.getConfig());}catch(e){error=e.message;}return {running:this.running,city:cfg?.city||'未配置',times:cfg?[cfg.eveningTime,cfg.morningTime]:[],timeZone:cfg?.timeZone,recipients:targetsOf(this.hostConfig()).length,mode:'scheduled-ai-required',info:!cfg?.city?'等待在插件设置中填写城市':this.info,lastError:error||this.lastError,previewOnly:cfg?.previewOnly};}
   async tick() {
     if(!this.running||this.coordinator.busy||this.now()<this.nextRetry)return;
     const c=configOf(this.getConfig());if(c.enabled===false)return;
@@ -127,8 +127,9 @@ export class WeatherEngine {
       // Keep a month of delivery records. 'pending' is deliberately terminal after a crash/timeout.
       const cutoff=addDay(clockParts(now,c.timeZone).date,-30);
       for(const [key,r] of Object.entries(state.deliveries)) if(r.date<cutoff)delete state.deliveries[key];
-      const jobs=slots.flatMap(slot=>targets.map(chatKey=>({slot,chatKey,key:`${slot.date}|${slot.kind}|${chatKey}|${c.previewOnly?'preview':'send'}`}))).filter(j=>!state.deliveries[j.key]);
-      if(!jobs.length){this.info='本时段已处理';return;}
+      const candidates=slots.flatMap(slot=>targets.map(chatKey=>({slot,chatKey,key:`${slot.date}|${slot.kind}|${chatKey}|${c.previewOnly?'preview':'send'}`})));
+      const jobs=candidates.filter(j=>{const r=state.deliveries[j.key];return !r||(r.status==='ai-error'&&now>=r.retryAt);});
+      if(!jobs.length){const retry=candidates.map(j=>state.deliveries[j.key]).find(r=>r?.status==='ai-error');this.info=retry?'AI 关怀生成失败，等待自动重试':'本时段已处理';if(retry)this.lastError=retry.error;return;}
       if(!await this.canSend(signal)){this.info='QQ 离线或宿主暂停，稍后补查';return;}
       const data=await this.forecast(c.city,c,signal);
       for(const {slot,chatKey,key} of jobs) {
@@ -136,10 +137,21 @@ export class WeatherEngine {
         if(!await this.canSend(signal))return;
         if(!targetsOf(this.hostConfig()).includes(chatKey))continue;
         const report=analyze(data,slot,c);
-        if(!report.shouldSend){state.deliveries[key]={date:slot.date,status:'quiet',at:this.now()};this.save(state);this.info='天气平稳，本轮不打扰';continue;}
-        const factual=factualText(data,slot,report,c);let care='';
-        if(c.aiCare)try{care=String(await this.care({chatKey,forecast:data,slot,report,c,signal})).trim().slice(0,280);}catch(e){if(signal.aborted)return;this.lastError='AI 关怀文案不可用，已使用规则提醒';this.log(this.lastError);}
-        const text=factual+(care?'\n\n'+care:'');
+        // The timer owns the decision. Even calm weather and legacy aiCare=false
+        // must produce AI care; a failed generation is not a delivered reminder.
+        let care;
+        try{
+          const generated=await this.care({chatKey,forecast:data,slot,report,c,signal});
+          care=typeof generated==='string'?generated.trim().slice(0,280):'';
+          if(!care)throw new Error('AI 没有返回关怀正文');
+        }catch(e){
+          if(!current())return;
+          const attempts=(state.deliveries[key]?.attempts||0)+1;
+          this.lastError='AI 关怀生成失败：'+String(e?.message||e);
+          state.deliveries[key]={date:slot.date,status:'ai-error',at:this.now(),attempts,retryAt:this.now()+Math.min(attempts,5)*60000,error:this.lastError};
+          this.save(state);this.info='未发送纯天气预报，将在补查窗口内重试 AI 关怀';this.log(this.lastError);continue;
+        }
+        const text=care;
         if(!current()||!targetsOf(this.hostConfig()).includes(chatKey))return;
         // Discard results if generation ran beyond the configured delivery window.
         if(!dueSlots(this.now(),c).some(s=>s.date===slot.date&&s.kind===slot.kind))return;
@@ -147,8 +159,8 @@ export class WeatherEngine {
         state.deliveries[key]={date:slot.date,status:'pending',at:this.now()};this.save(state);
         try {
           const result=await this.send(chatKey,text,signal);
-          state.deliveries[key]={date:slot.date,status:'sent',at:this.now(),messageId:result.messageId};
-          this.info='天气提醒已发送';this.lastError='';
+          state.deliveries[key]={date:slot.date,status:'sent',at:this.now(),messageId:result.messageId,care:'ai'};
+          this.info='AI 天气关怀已发送';this.lastError='';
         }catch(e){state.deliveries[key]={date:slot.date,status:'uncertain',at:this.now(),error:e.message};this.lastError=e.message;this.info='发送未确认，停止自动重发以免重复';this.log(this.info+'：'+e.message);}
         this.save(state);
         if(signal.aborted)return;
