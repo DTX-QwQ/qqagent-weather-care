@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const DEFAULTS = {city:'',countryCode:'CN',latitude:'',longitude:'',eveningTime:'22:00',morningTime:'00:00',timeZone:'Asia/Shanghai',temperatureChange:5,hotTemperature:35,coldTemperature:0,windGust:50,rainProbability:60,catchUpMinutes:30,aiCare:true,extraStyle:'',dailyBriefing:false,previewOnly:false,chatEnabled:true,chatCooldownMinutes:30,chatGraceSeconds:20,chatMaxPerDay:6};
+export const DEFAULTS = {city:'',countryCode:'CN',latitude:'',longitude:'',scheduleEnabled:true,eveningTime:'22:00',morningTime:'00:00',timeZone:'Asia/Shanghai',temperatureChange:5,hotTemperature:35,coldTemperature:0,windGust:50,rainProbability:60,catchUpMinutes:30,aiCare:true,extraStyle:'',dailyBriefing:false,previewOnly:false,chatEnabled:true,chatCooldownMinutes:30,chatGraceSeconds:20,chatMaxPerDay:6};
 export function configOf(raw={}) {
   const c={...DEFAULTS,...raw};
   for(const key of ['city','countryCode','latitude','longitude','eveningTime','morningTime','timeZone','extraStyle']) c[key]=String(c[key]??'').trim();
@@ -15,7 +15,7 @@ export function configOf(raw={}) {
   if((c.latitude==='')!==(c.longitude==='')) throw new Error('经纬度需要同时填写，或同时留空');
   if(c.latitude!==''&&(!Number.isFinite(Number(c.latitude))||!Number.isFinite(Number(c.longitude))||Math.abs(Number(c.latitude))>90||Math.abs(Number(c.longitude))>180)) throw new Error('经纬度不合法');
   if(!/^[A-Za-z]{2}$/.test(c.countryCode)) throw new Error('国家代码应为两位字母，如 CN');
-  for(const key of ['aiCare','dailyBriefing','previewOnly','chatEnabled']) if(typeof c[key]!=='boolean') throw new Error(`${key} 必须是开关值`);
+  for(const key of ['scheduleEnabled','aiCare','dailyBriefing','previewOnly','chatEnabled']) if(typeof c[key]!=='boolean') throw new Error(`${key} 必须是开关值`);
   return c;
 }
 export function clockParts(now,timeZone) {
@@ -24,6 +24,7 @@ export function clockParts(now,timeZone) {
 }
 export function addDay(date,n) {return new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);}
 export function dueSlots(now,c) {
+  if(c.scheduleEnabled===false)return [];
   const p=clockParts(now,c.timeZone), slots=[];
   for(const [kind,time] of [['evening',c.eveningTime],['morning',c.morningTime]]) {
     const [h,m]=time.split(':').map(Number),target=h*60+m;
@@ -113,10 +114,12 @@ export class WeatherEngine {
   start() {if(this.running)return;this.running=true;this.controller=new AbortController();this.timer=setTimeout(()=>this.loop(),1000);this.timer.unref?.();}
   stop() {this.running=false;clearTimeout(this.timer);this.controller?.abort();}
   async loop() {try{await this.tick();}catch(e){this.lastError=e.message;this.info='检查失败';this.nextRetry=this.now()+5*60000;this.log(e.message);}finally{if(this.running){this.timer=setTimeout(()=>this.loop(),30000);this.timer.unref?.();}}}
-  status() {let cfg,error;try{cfg=configOf(this.getConfig());}catch(e){error=e.message;}return {running:this.running,city:cfg?.city||'未配置',times:cfg?[cfg.eveningTime,cfg.morningTime]:[],timeZone:cfg?.timeZone,recipients:targetsOf(this.hostConfig()).length,mode:'scheduled-ai-required',info:!cfg?.city?'等待在插件设置中填写城市':this.info,lastError:error||this.lastError,previewOnly:cfg?.previewOnly};}
+  status() {let cfg,error;try{cfg=configOf(this.getConfig());}catch(e){error=e.message;}return {running:this.running,scheduleEnabled:cfg?.scheduleEnabled,city:cfg?.city||'未配置',times:cfg?[cfg.eveningTime,cfg.morningTime]:[],timeZone:cfg?.timeZone,recipients:targetsOf(this.hostConfig()).length,mode:'scheduled-ai-required',info:cfg?.scheduleEnabled===false?'按时间自动提醒已关闭':!cfg?.city?'等待在插件设置中填写城市':this.info,lastError:error||this.lastError,previewOnly:cfg?.previewOnly};}
   async tick() {
-    if(!this.running||this.coordinator.busy||this.now()<this.nextRetry)return;
+    if(!this.running)return;
     const c=configOf(this.getConfig());if(c.enabled===false)return;
+    if(!c.scheduleEnabled){this.info='按时间自动提醒已关闭';return;}
+    if(this.coordinator.busy||this.now()<this.nextRetry)return;
     if(!c.city){this.info='等待在插件设置中填写城市';return;}
     const targets=targetsOf(this.hostConfig());if(!targets.length){this.info='白名单为空，无接收对象';return;}
     const now=this.now(),slots=dueSlots(now,c);if(!slots.length){this.info='等待下个提醒时间';return;}

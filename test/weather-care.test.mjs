@@ -45,6 +45,8 @@ test('manifest follows the installed host schema',async()=>{
   assert.equal(configOf(raw.settings).chatEnabled,true);
 });
 test('times, coordinates, booleans, thresholds validated',()=>{
+  assert.equal(configOf().scheduleEnabled,true);
+  assert.throws(()=>configOf({scheduleEnabled:'false'}));
   for(const bad of [{eveningTime:'25:00'},{morningTime:'22:00'},{latitude:'x',longitude:'1'},{latitude:'1'},{timeZone:'Nope'},{temperatureChange:0},{chatMaxPerDay:0},{chatGraceSeconds:121},{aiCare:'false'}])assert.throws(()=>configOf(bad));
 });
 test('explicit whitelist, deny priority and no empty-list broadcast',()=>{
@@ -81,6 +83,51 @@ test('rejects missing critical fields and stale dates',()=>{
 test('scheduled delivery persists dedupe across engine instances',async()=>{
   const h=scheduled();await h.engine.tick();assert.equal(h.sent.length,1);assert.equal(h.sent[0].text,'明天记得带伞，早点休息，晚安。');
   const h2=scheduled({dir:h.engine.dir});await h2.engine.tick();assert.equal(h2.sent.length,0);
+});
+
+test('schedule switch blocks both time slots and catchup without weather, AI or state writes',async()=>{
+  const h=scheduled({forecast:async()=>{assert.fail('Disabled schedule fetched weather');},care:async()=>{assert.fail('Disabled schedule called AI');}});
+  h.c.scheduleEnabled=false;
+  for(const time of [now,now+15*60000,Date.parse('2026-10-20T16:00:10Z')]){
+    h.engine.now=()=>time;
+    assert.deepEqual(dueSlots(time,h.c),[]);
+    await h.engine.tick();
+  }
+  assert.equal(h.sent.length,0);
+  assert.deepEqual(fs.readdirSync(h.engine.dir),[]);
+  assert.equal(h.engine.status().scheduleEnabled,false);
+  assert.equal(h.engine.status().info,'按时间自动提醒已关闭');
+});
+
+test('schedule toggle takes effect live and preserves sent dedupe',async()=>{
+  const h=scheduled();h.c.scheduleEnabled=false;await h.engine.tick();assert.equal(h.sent.length,0);
+  h.c.scheduleEnabled=true;await h.engine.tick();assert.equal(h.sent.length,1);
+  const h2=scheduled({dir:h.engine.dir});h2.c.scheduleEnabled=false;await h2.engine.tick();
+  h2.c.scheduleEnabled=true;await h2.engine.tick();assert.equal(h2.sent.length,0);
+  const late=scheduled({now:()=>now+31*60000});late.c.scheduleEnabled=false;await late.engine.tick();
+  late.c.scheduleEnabled=true;await late.engine.tick();assert.equal(late.sent.length,0);
+});
+
+test('switching schedule off during forecast or AI discards in-flight reminder',async()=>{
+  for(const stage of ['forecast','care']){
+    const h=scheduled();
+    h.engine[stage]=async()=>{h.c.scheduleEnabled=false;return stage==='forecast'?forecast():'晚安。';};
+    await h.engine.tick();assert.equal(h.sent.length,0);
+    assert.deepEqual(fs.readdirSync(h.engine.dir),[]);
+  }
+});
+
+test('schedule switch pauses pending AI retries without changing their state',async()=>{
+  const h=scheduled({care:async()=>{throw Error('AI unavailable');}});await h.engine.tick();
+  const before=fs.readFileSync(path.join(h.engine.dir,'state.json'),'utf8');
+  h.c.scheduleEnabled=false;h.engine.now=()=>now+60001;
+  h.engine.care=async()=>{assert.fail('Disabled schedule retried AI');};
+  await h.engine.tick();assert.equal(fs.readFileSync(path.join(h.engine.dir,'state.json'),'utf8'),before);
+  assert.equal(h.sent.length,0);
+});
+
+test('chat care continues when scheduled reminders are off',async()=>{
+  const h=chatting();h.c.scheduleEnabled=false;await h.chat.tick();assert.equal(h.sent.length,1);
 });
 test('stable schedule always generates AI care despite legacy toggles',async()=>{
   let calls=0;const h=scheduled({forecast:async()=>forecast(),care:async()=>{calls++;return '晚安，愿你明天顺顺利利。';}});

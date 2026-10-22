@@ -67,7 +67,7 @@ export function setup(a){
   });
   a.registerTool({id:'status',name:'天气关怀配置与状态',category:'query',icon:'📋',description:'只读查看天气城市、提醒时间、白名单接收对象数量、聊天自动关怀状态及最近错误；不会发送或修改设置。',parameters:{type:'object',properties:{}},
     execute:()=>({content:JSON.stringify({schedule:engine.status(),chat:{enabled:a.config().chatEnabled!==false,running:chat.running,info:chat.info,lastError:chat.lastError}})})});
-  a.log('天气关怀 v1.1.1 已加载；定时到点强制生成 AI 关怀，生成失败在补查窗口内重试；接收对象取 QQ Agent 白名单。');
+  a.log('天气关怀 v1.1.1 已加载；定时提醒支持独立开关，开启时到点强制生成 AI 关怀，生成失败在补查窗口内重试；接收对象取 QQ Agent 白名单。');
 }
 export function activate(){engine?.start();chat?.start();}
 export function deactivate(){engine?.stop();chat?.stop();}
